@@ -1440,6 +1440,116 @@ err_out:
 	return FYCR_ERROR;
 }
 
+void dump_event_tsv(struct fy_parser *fyp, struct fy_event *fye,
+			  struct fy_token_iter *iter, bool disable_flow_markers)
+{
+	const char *anchor = NULL;
+	const char *tag = NULL;
+	const char *text = NULL;
+	size_t anchor_len = 0, tag_len = 0, text_len = 0;
+	enum fy_scalar_style style;
+
+	switch (fye->type) {
+	case FYET_NONE:
+		printf("???");
+		break;
+	case FYET_STREAM_START:
+		printf("+STR");
+		break;
+	case FYET_STREAM_END:
+		printf("-STR");
+		break;
+	case FYET_DOCUMENT_START:
+		printf("+DOC%s", !fy_document_event_is_implicit(fye) ? " ---" : "");
+		break;
+	case FYET_DOCUMENT_END:
+		printf("-DOC%s", !fy_document_event_is_implicit(fye) ? " ..." : "");
+		break;
+	case FYET_MAPPING_START:
+		if (fye->mapping_start.anchor)
+			anchor = fy_token_get_text(fye->mapping_start.anchor, &anchor_len);
+		if (fye->mapping_start.tag)
+			tag = fy_token_get_text(fye->mapping_start.tag, &tag_len);
+		printf("+MAP");
+		if (!disable_flow_markers && fy_event_get_node_style(fye) == FYNS_FLOW)
+			printf(" {}");
+		if (anchor) {
+			printf(" &%.*s", (int)anchor_len, anchor);
+		}
+		if (tag) {
+			printf(" <%.*s>", (int)tag_len, tag);
+		}
+		break;
+	case FYET_MAPPING_END:
+		printf("-MAP");
+		break;
+	case FYET_SEQUENCE_START:
+		if (fye->sequence_start.anchor)
+			anchor = fy_token_get_text(fye->sequence_start.anchor, &anchor_len);
+		if (fye->sequence_start.tag)
+			tag = fy_token_get_text(fye->sequence_start.tag, &tag_len);
+		printf("+SEQ");
+		if (!disable_flow_markers && fy_event_get_node_style(fye) == FYNS_FLOW)
+			printf(" []");
+		if (anchor) {
+			printf(" &%.*s", (int)anchor_len, anchor);
+		}
+		if (tag) {
+			printf(" <%.*s>", (int)tag_len, tag);
+		}
+		break;
+	case FYET_SEQUENCE_END:
+		printf("-SEQ");
+		break;
+	case FYET_SCALAR:
+		if (fye->scalar.anchor)
+			anchor = fy_token_get_text(fye->scalar.anchor, &anchor_len);
+		if (fye->scalar.tag)
+			tag = fy_token_get_text(fye->scalar.tag, &tag_len);
+
+		printf("=VAL");
+		if (anchor) {
+			printf(" &%.*s", (int)anchor_len, anchor);
+		}
+		if (tag) {
+			printf(" <%.*s>", (int)tag_len, tag);
+		}
+
+		style = fy_token_scalar_style(fye->scalar.value);
+		switch (style) {
+		case FYSS_PLAIN:
+			printf(" :");
+			break;
+		case FYSS_SINGLE_QUOTED:
+			printf(" '");
+			break;
+		case FYSS_DOUBLE_QUOTED:
+			printf(" \"");
+			break;
+		case FYSS_LITERAL:
+			printf(" |");
+			break;
+		case FYSS_FOLDED:
+			printf(" >");
+			break;
+		default:
+			abort();
+		}
+
+		text = fy_token_get_text(fye->scalar.value, &text_len);
+		if (text && text_len > 0)
+			print_escaped(text, text_len);
+		break;
+	case FYET_ALIAS:
+		anchor = fy_token_get_text(fye->alias.anchor, &anchor_len);
+		printf("=ALI *%.*s", (int)anchor_len, anchor);
+		break;
+	default:
+		assert(0);
+	}
+	fputs("\n", stdout);
+}
+
 int main(int argc, char *argv[])
 {
 	struct fy_parse_cfg cfg = {
@@ -2367,7 +2477,7 @@ int main(int argc, char *argv[])
 		if (!document_event_stream) {
 			/* regular test suite */
 			while ((fyev = fy_parser_parse(fyp)) != NULL) {
-				dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+				dump_event_tsv(fyp, fyev, iter, disable_flow_markers);
 				fy_parser_event_free(fyp, fyev);
 			}
 		} else {
@@ -2381,7 +2491,7 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "failed to create document iterator's stream start event\n");
 				goto cleanup;
 			}
-			dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+			dump_event_tsv(fyp, fyev, iter, disable_flow_markers);
 			fy_document_iterator_event_free(fydi, fyev);
 
 			/* convert to document and then process the generator event stream it */
@@ -2392,11 +2502,11 @@ int main(int argc, char *argv[])
 					fprintf(stderr, "failed to create document iterator's document start event\n");
 					goto cleanup;
 				}
-				dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+				dump_event_tsv(fyp, fyev, iter, disable_flow_markers);
 				fy_document_iterator_event_free(fydi, fyev);
 
 				while ((fyev = fy_document_iterator_body_next(fydi)) != NULL) {
-					dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+					dump_event_tsv(fyp, fyev, iter, disable_flow_markers);
 					fy_document_iterator_event_free(fydi, fyev);
 				}
 
@@ -2405,7 +2515,7 @@ int main(int argc, char *argv[])
 					fprintf(stderr, "failed to create document iterator's stream document end\n");
 					goto cleanup;
 				}
-				dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+				dump_event_tsv(fyp, fyev, iter, disable_flow_markers);
 				fy_document_iterator_event_free(fydi, fyev);
 
 				fy_parse_document_destroy(fyp, fyd);
@@ -2419,7 +2529,7 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "failed to create document iterator's stream end event\n");
 				goto cleanup;
 			}
-			dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+			dump_event_tsv(fyp, fyev, iter, disable_flow_markers);
 			fy_document_iterator_event_free(fydi, fyev);
 
 			fy_document_iterator_destroy(fydi);
