@@ -65,6 +65,7 @@
 #define OPT_PARSE_DUMP			1007
 #define OPT_YAML_VERSION_DUMP		1008
 #define OPT_COMPOSE			1009
+#define OPT_EVENT_TSV			1010
 
 #define OPT_STRIP_LABELS		2000
 #define OPT_STRIP_TAGS			2001
@@ -119,6 +120,7 @@ static struct option lopts[] = {
 	{"scan-dump",		no_argument,		0,	OPT_SCAN_DUMP },
 	{"parse-dump",		no_argument,		0,	OPT_PARSE_DUMP },
 	{"compose",		no_argument,		0,	OPT_COMPOSE },
+        {"event-tsv",           no_argument,            0,      OPT_EVENT_TSV },
 	{"dump-path",		no_argument,		0,	OPT_DUMP_PATH },
 	{"yaml-version-dump",	no_argument,		0,	OPT_YAML_VERSION_DUMP },
 	{"strip-labels",	no_argument,		0,	OPT_STRIP_LABELS },
@@ -284,6 +286,10 @@ static void display_usage(FILE *fp, char *progname, int tool_mode)
 		fprintf(fp, "\t--dump-path              : Dump the path while composing\n");
 	}
 
+	if (tool_mode == OPT_TOOL || tool_mode == OPT_EVENT_TSV) {
+		fprintf(fp, "\t--dump-path              : Dump each parse event as a TSV line\n");
+	}
+
 	if (tool_mode == OPT_TOOL) {
 		fprintf(fp, "\t--dump                   : Dump mode, [arguments] are file names\n");
 		fprintf(fp, "\t--testsuite              : Testsuite mode, [arguments] are <file>s to output parse events\n");
@@ -293,6 +299,7 @@ static void display_usage(FILE *fp, char *progname, int tool_mode)
 		fprintf(fp, "\t--scan-dump              : scan-dump mode, [arguments] are file names\n");
 		fprintf(fp, "\t--parse-dump             : parse-dump mode, [arguments] are file names\n");
 		fprintf(fp, "\t--compose                : composer driver dump mode, [arguments] are file names\n");
+		fprintf(fp, "\t--event-tsv              : event-tsv mode, [arguments] are <file>s to output parse events as TSV lines\n");
 		fprintf(fp, "\t--yaml-version           : Information about supported libfyaml's YAML versions\n");
 	}
 
@@ -370,6 +377,9 @@ static void display_usage(FILE *fp, char *progname, int tool_mode)
 		fprintf(fp, "\t$ %s --compose -mjson \">foo: bar\"\n", progname);
 		fprintf(fp, "\t{\n\t  \"foo\": \"bar\"\n\t}\n");
 		break;
+        case OPT_EVENT_TSV:
+		fprintf(fp, "\n");
+                break;
 	case OPT_YAML_VERSION_DUMP:
 		fprintf(fp, "\tDisplay information about the YAML versions libfyaml supports)\n");
 		fprintf(fp, "\n");
@@ -1518,6 +1528,8 @@ int main(int argc, char *argv[])
 		tool_mode = OPT_PARSE_DUMP;
 	else if (!strcmp(progname, "fy-compose"))
 		tool_mode = OPT_COMPOSE;
+	else if (!strcmp(progname, "fy-event-tsv"))
+		tool_mode = OPT_EVENT_TSV;
 	else if (!strcmp(progname, "fy-yaml-version-dump"))
 		tool_mode = OPT_YAML_VERSION_DUMP;
 	else
@@ -1687,6 +1699,7 @@ int main(int argc, char *argv[])
 		case OPT_SCAN_DUMP:
 		case OPT_PARSE_DUMP:
 		case OPT_COMPOSE:
+		case OPT_EVENT_TSV:
 		case OPT_YAML_VERSION_DUMP:
 			tool_mode = opt;
 			break;
@@ -1837,7 +1850,7 @@ int main(int argc, char *argv[])
 
 	exitcode = EXIT_FAILURE;
 
-	if (tool_mode != OPT_TESTSUITE) {
+	if (tool_mode != OPT_TESTSUITE && tool_mode != OPT_EVENT_TSV) {
 
 		memset(&emit_cfg, 0, sizeof(emit_cfg));
 		emit_cfg.flags = emit_flags |
@@ -2335,6 +2348,90 @@ int main(int argc, char *argv[])
 
 		break;
 
+	case OPT_EVENT_TSV:
+		if (optind >= argc || !strcmp(argv[optind], "-"))
+			rc = fy_parser_set_input_fp(fyp, "stdin", stdin);
+		else
+			rc = fy_parser_set_input_file(fyp, argv[optind]);
+		if (rc) {
+			fprintf(stderr, "failed to set testsuite input\n");
+			goto cleanup;
+		}
+
+		iter = fy_token_iter_create(NULL);
+		if (!iter) {
+			fprintf(stderr, "failed to create token iterator\n");
+			goto cleanup;
+		}
+
+		if (!document_event_stream) {
+			/* regular test suite */
+			while ((fyev = fy_parser_parse(fyp)) != NULL) {
+				dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+				fy_parser_event_free(fyp, fyev);
+			}
+		} else {
+			struct fy_document_iterator *fydi;
+
+			fydi = fy_document_iterator_create();
+			assert(fydi);
+
+			fyev = fy_document_iterator_stream_start(fydi);
+			if (!fyev) {
+				fprintf(stderr, "failed to create document iterator's stream start event\n");
+				goto cleanup;
+			}
+			dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+			fy_document_iterator_event_free(fydi, fyev);
+
+			/* convert to document and then process the generator event stream it */
+			while ((fyd = fy_parse_load_document(fyp)) != NULL) {
+
+				fyev = fy_document_iterator_document_start(fydi, fyd);
+				if (!fyev) {
+					fprintf(stderr, "failed to create document iterator's document start event\n");
+					goto cleanup;
+				}
+				dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+				fy_document_iterator_event_free(fydi, fyev);
+
+				while ((fyev = fy_document_iterator_body_next(fydi)) != NULL) {
+					dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+					fy_document_iterator_event_free(fydi, fyev);
+				}
+
+				fyev = fy_document_iterator_document_end(fydi);
+				if (!fyev) {
+					fprintf(stderr, "failed to create document iterator's stream document end\n");
+					goto cleanup;
+				}
+				dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+				fy_document_iterator_event_free(fydi, fyev);
+
+				fy_parse_document_destroy(fyp, fyd);
+				if (rc)
+					break;
+
+			}
+
+			fyev = fy_document_iterator_stream_end(fydi);
+			if (!fyev) {
+				fprintf(stderr, "failed to create document iterator's stream end event\n");
+				goto cleanup;
+			}
+			dump_testsuite_event(fyp, fyev, du.colorize, iter, disable_flow_markers);
+			fy_document_iterator_event_free(fydi, fyev);
+
+			fy_document_iterator_destroy(fydi);
+			fydi = NULL;
+		}
+
+		fy_token_iter_destroy(iter);
+		iter = NULL;
+
+		if (fy_parser_get_stream_error(fyp))
+			goto cleanup;
+                break;
 
 	}
 	exitcode = EXIT_SUCCESS;
