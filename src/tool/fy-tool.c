@@ -1448,106 +1448,118 @@ void dump_event_tsv(struct fy_parser *fyp, struct fy_event *fye,
 	const char *text = NULL;
 	size_t anchor_len = 0, tag_len = 0, text_len = 0;
 	enum fy_scalar_style style;
+        const struct fy_mark *mark = NULL;
+        int pos = 0, line = 0, col = 0;
+
+        mark = fy_event_start_mark(fye);
+        pos = mark->input_pos;
+        line = mark->line;
+        col = mark->column;
 
 	switch (fye->type) {
 	case FYET_NONE:
 		printf("???");
 		break;
 	case FYET_STREAM_START:
-		printf("+STR");
+		printf("+str");
+		// printf("+str\t%d:%d:%d", pos, line, col);
 		break;
 	case FYET_STREAM_END:
-		printf("-STR");
+		printf("-str");
 		break;
 	case FYET_DOCUMENT_START:
-		printf("+DOC%s", !fy_document_event_is_implicit(fye) ? " ---" : "");
+		printf("%s\t%s",
+                        "+doc",
+                        fye->document_start.implicit ? "implicit" : "explicit"
+                );
 		break;
 	case FYET_DOCUMENT_END:
-		printf("-DOC%s", !fy_document_event_is_implicit(fye) ? " ..." : "");
+		printf("%s\t%s",
+                        "-doc",
+                        fye->document_end.implicit ? "implicit" : "explicit"
+                );
 		break;
 	case FYET_MAPPING_START:
-		if (fye->mapping_start.anchor)
-			anchor = fy_token_get_text(fye->mapping_start.anchor, &anchor_len);
-		if (fye->mapping_start.tag)
-			tag = fy_token_get_text(fye->mapping_start.tag, &tag_len);
-		printf("+MAP");
-		if (!disable_flow_markers && fy_event_get_node_style(fye) == FYNS_FLOW)
-			printf(" {}");
-		if (anchor) {
-			printf(" &%.*s", (int)anchor_len, anchor);
-		}
-		if (tag) {
-			printf(" <%.*s>", (int)tag_len, tag);
-		}
+		printf("+map");
+		printf("\t%s", (!disable_flow_markers && fy_event_get_node_style(fye) == FYNS_FLOW) ? "flow" : "block");
+                printf("\t");
+		if (fye->mapping_start.anchor) {
+                        anchor = fy_token_get_text(fye->mapping_start.anchor, &anchor_len);
+                        printf("%.*s", (int)anchor_len, anchor);
+                }
+                printf("\t");
+		if (fye->mapping_start.tag) {
+                        tag = fy_token_get_text(fye->mapping_start.tag, &tag_len);
+                        printf("%.*s", (int)tag_len, tag);
+                }
 		break;
 	case FYET_MAPPING_END:
-		printf("-MAP");
+		printf("-map");
 		break;
 	case FYET_SEQUENCE_START:
-		if (fye->sequence_start.anchor)
+		printf("+seq");
+		printf("\t%s", (!disable_flow_markers && fy_event_get_node_style(fye) == FYNS_FLOW) ? "flow" : "block");
+                printf("\t");
+		if (fye->sequence_start.anchor) {
 			anchor = fy_token_get_text(fye->sequence_start.anchor, &anchor_len);
-		if (fye->sequence_start.tag)
+			printf("%.*s", (int)anchor_len, anchor);
+                }
+                printf("\t");
+		if (fye->sequence_start.tag) {
 			tag = fy_token_get_text(fye->sequence_start.tag, &tag_len);
-		printf("+SEQ");
-		if (!disable_flow_markers && fy_event_get_node_style(fye) == FYNS_FLOW)
-			printf(" []");
-		if (anchor) {
-			printf(" &%.*s", (int)anchor_len, anchor);
-		}
-		if (tag) {
-			printf(" <%.*s>", (int)tag_len, tag);
-		}
+			printf("%.*s", (int)tag_len, tag);
+                }
 		break;
 	case FYET_SEQUENCE_END:
-		printf("-SEQ");
+		printf("-seq");
 		break;
 	case FYET_SCALAR:
-		if (fye->scalar.anchor)
-			anchor = fy_token_get_text(fye->scalar.anchor, &anchor_len);
-		if (fye->scalar.tag)
-			tag = fy_token_get_text(fye->scalar.tag, &tag_len);
-
-		printf("=VAL");
-		if (anchor) {
-			printf(" &%.*s", (int)anchor_len, anchor);
-		}
-		if (tag) {
-			printf(" <%.*s>", (int)tag_len, tag);
-		}
-
+		printf("=val");
+                printf("\t");
 		style = fy_token_scalar_style(fye->scalar.value);
 		switch (style) {
 		case FYSS_PLAIN:
-			printf(" :");
+			printf("plain");
 			break;
 		case FYSS_SINGLE_QUOTED:
-			printf(" '");
+			printf("single");
 			break;
 		case FYSS_DOUBLE_QUOTED:
-			printf(" \"");
+			printf("double");
 			break;
 		case FYSS_LITERAL:
-			printf(" |");
+			printf("literal");
 			break;
 		case FYSS_FOLDED:
-			printf(" >");
+			printf("folded");
 			break;
 		default:
 			abort();
 		}
-
+                printf("\t");
+		if (fye->scalar.anchor) {
+			anchor = fy_token_get_text(fye->scalar.anchor, &anchor_len);
+			printf(" &%.*s", (int)anchor_len, anchor);
+		}
+                printf("\t");
+		if (fye->scalar.tag) {
+			tag = fy_token_get_text(fye->scalar.tag, &tag_len);
+			printf(" <%.*s>", (int)tag_len, tag);
+		}
+                printf("\t");
 		text = fy_token_get_text(fye->scalar.value, &text_len);
 		if (text && text_len > 0)
 			print_escaped(text, text_len);
 		break;
 	case FYET_ALIAS:
 		anchor = fy_token_get_text(fye->alias.anchor, &anchor_len);
-		printf("=ALI *%.*s", (int)anchor_len, anchor);
+		printf("=ali\t%.*s", (int)anchor_len, anchor);
 		break;
 	default:
 		assert(0);
 	}
-	fputs("\n", stdout);
+
+	printf("\n");
 }
 
 int main(int argc, char *argv[])
